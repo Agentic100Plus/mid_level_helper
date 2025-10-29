@@ -1,0 +1,36 @@
+[project]
+name = "mid-level-helper"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=1.0.2",
+    "langchain-google-genai>=3.0.0",
+    "langgraph>=1.0.1",
+    "openai>=2.6.1",
+    "pandas>=2.0.0",
+    "pinecone>=7.3.0",
+    "python-dotenv>=1.0.0",
+    "streamlit>=1.50.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.14.2",
+]
+
+
+
+[tool.ruff]
+line-length = 130
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
