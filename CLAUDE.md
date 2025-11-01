@@ -10,11 +10,13 @@ A LangChain v1.0 chatbot that analyzes mid-level (중니어) developer concerns,
 
 ## Technology Stack
 
-- **LangChain v1.0+**: Core framework (v1.0.2+) - use LangChain v1 patterns, not legacy chains
-- **Google GenAI**: LLM provider via `langchain-google-genai` (v3.0.0+)
-- **Streamlit**: UI framework (v1.50.0+) with multi-page app structure
+- **LangChain v1.0+**: Core framework (v1.0.2+) with ReAct Agent pattern
+- **LangGraph**: Agent orchestration with tools, middleware, and context injection
+- **Google GenAI (Gemini 2.5 Flash Lite)**: LLM provider via `langchain-google-genai` (v3.0.0+)
+- **Streamlit**: UI framework (v1.50.0+) with multi-page app and real-time token streaming
 - **Pinecone**: Vector database for semantic search
 - **Upstage Solar**: Korean-optimized embeddings (4096 dimensions)
+- **DuckDuckGo Search**: Web search tool for latest information
 - **Python 3.13**: Required minimum version
 - **uv**: Dependency management tool
 
@@ -52,8 +54,14 @@ streamlit run main.py
 
 # The app has multiple pages:
 # - main.py: Profile/concern registration
-# - pages/chatbot.py: AI consultation (WIP)
+# - pages/chatbot.py: AI consultation with ReAct Agent (✅ Implemented with streaming)
 # - pages/search.py: Semantic search (WIP)
+
+# Environment variables required:
+# - UPSTAGE_API_KEY: Upstage Solar embeddings
+# - PINECONE_API_KEY: Pinecone vector database
+# - GOOGLE_API_KEY: Google Gemini API
+# - PINECONE_INDEX_NAME: Pinecone index name (default: mid-level-helper)
 ```
 
 ### Testing and Quality
@@ -93,30 +101,112 @@ Columns (Korean headers):
 
 **main.py**: Entry point with cached resource initialization
 - `@st.cache_resource` for Pinecone index, Upstage client, Gemini LLM
-- Session state management: `user_profile`, `user_concerns`, `chat_history`, `search_results`
+- Session state management: `user_profile`, `user_concerns`, `chat_messages`, `search_results`
 - Profile/concern registration forms with validation
+- **IMPORTANT**: `get_gemini()` returns cached LLM instance (not pre-instantiated)
 
-**chains/**: RAG implementation (partially implemented)
-- `retriever.py`: Pinecone semantic search with Upstage embeddings
-- `chain.py`: RAG chain (placeholder)
+**pages/chatbot.py**: ReAct Agent chatbot with real-time streaming (✅ Implemented)
+- LangGraph `create_agent()` with tools and middleware
+- Real-time token streaming using `stream_mode="messages"`
+- Tool execution visualization (🔧 Tool calls, ✅ Tool results)
+- Dynamic system prompt based on user profile
+- Chat history management with session state
+
+**agents/react_chain.py**: Agent configuration (commented out, replaced by inline implementation)
+- Originally designed for cached agent, now created per-session in chatbot.py
+- See AGENTIC_SYSTEM_DESIGN.md for future multi-agent architecture
+
+**tools/**: LangChain tools for agent (✅ Implemented)
+- `sementic_search.py`: Pinecone semantic search with Upstage embeddings
+- `ddgs_search.py`: DuckDuckGo web search for latest information
+- `expert_search.py`: Domain expert advice generation
+
+**middleware/middleware.py**: LangGraph middleware (✅ Implemented)
+- `dynamic_system_prompt`: Context-aware system prompt injection
+- `SummarizationMiddleware`: Conversation summarization (4000 token threshold)
+- `ToolCallLimitMiddleware`: Tool usage limits (websearch: 5 per thread, 3 per run)
+- `ToolRetryMiddleware`: Automatic tool retry with exponential backoff
+- `LoggingMiddleware`: Tool call and response logging
 
 **schemas/**: Pydantic data models
-- `UserProfile`: Career info, tech stack, work style
+- `UserProfile`: Career info, tech stack, work style with `to_context_string()`
 - `UserConcern`: Category, title, description, urgency
-- Both have helper methods: `to_search_query()`, `to_context_string()`
+- `CommonCompetencies`: Career-level-specific competencies and coaching approaches
+- Tool-specific schemas: `ToolDdgsResult`, `ToolAnalyzeProfileOutput`
 
 **utils/data_loader.py**: CSV processing utilities
 - Functions: `load_csv_data()`, `extract_category()`, `combine_text_for_embedding()`, `prepare_documents_for_vectorstore()`
 - Handles Korean text columns: `글 제목`, `출처`, `핵심 키워드`, `문제점 요약`, `글 내용 요약`
 
+**prompts/**: System prompts (✅ Implemented)
+- Career-level-specific prompts (junior, mid-level, senior)
+- Common competencies and coaching approaches
+
 ### Key Patterns
 
-**Resource Caching**:
+**Streamlit Caching + LangGraph Integration** (⚠️ Critical Pattern):
 ```python
-@st.cache_resource(show_spinner="...", ttl=3600)
-def get_pinecone():
-    # Expensive initialization cached for 1 hour
-    # Used in main.py and chains/retriever.py
+# ✅ Correct: Function returns cached instance
+@st.cache_resource(show_spinner="🔄 Gemini 로드 중...", ttl=3600)
+def get_gemini():
+    """Cache: Gemini LLM Loader"""
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash-lite",
+        temperature=0.7,
+        max_tokens=3000,
+        max_retries=3,
+        api_key=os.getenv("GOOGLE_API_KEY"),
+    )
+
+# Usage in agent creation
+llm = get_gemini()  # Call function to get cached instance
+agent = create_agent(model=llm, tools=tools, ...)
+
+# ❌ Wrong: Pre-instantiated at module level
+get_gemini = _get_gemini()  # Causes bind_tools error
+```
+
+**Real-Time Token Streaming** (✅ Implemented):
+```python
+# Use stream_mode="messages" for token-by-token streaming
+for chunk in agent.stream(
+    {"messages": [{"role": "user", "content": prompt}]},
+    context=profile,
+    stream_mode="messages",  # Critical for token streaming
+):
+    msg, metadata = chunk
+    node_name = metadata.get("langgraph_node", "")
+
+    # Token extraction from LLM node
+    if "model" in node_name.lower():
+        if msg.__class__.__name__ == "AIMessageChunk":
+            token = getattr(msg, "content", "")
+            if token:
+                full_response += token
+                response_placeholder.markdown(full_response + "▌")
+```
+
+**Agent + Middleware Pattern**:
+```python
+# Dynamic system prompt with user context
+@dynamic_prompt
+def dynamic_system_prompt(request: ModelRequest) -> str:
+    profile: UserProfile = request.runtime.context
+    return f"User profile: {profile.to_context_string()}"
+
+# Agent creation with middleware stack
+agent = create_agent(
+    model=llm,
+    tools=[ddgs_search, sementic_search, expert_search],
+    middleware=[
+        dynamic_system_prompt,  # First: inject context
+        SummarizationMiddleware(model=llm, max_tokens_before_summary=4000),
+        ToolCallLimitMiddleware(tool_name="websearch", thread_limit=5),
+        ToolRetryMiddleware(max_retries=3, backoff_factor=2.0),
+        LoggingMiddleware(),
+    ],
+    context_schema=UserProfile,
+)
 ```
 
 **Pinecone Namespace**:
@@ -127,23 +217,132 @@ def get_pinecone():
 - Scripts add project root to `sys.path` before imports
 - Pattern: `sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))`
 
-**LangChain v1 Patterns**:
-- Use LCEL (LangChain Expression Language): `prompt | llm | parser`
-- Use `langchain-google-genai.ChatGoogleGenerativeAI`, not legacy classes
-- Prefer `RunnableSequence` and `RunnableParallel` over deprecated Chain classes
+**LangChain v1 + LangGraph Patterns**:
+- Use `langchain.agents.create_agent()` for ReAct agents
+- Use `langchain-google-genai.ChatGoogleGenerativeAI` (not legacy classes)
+- Tools defined with `@tool` decorator
+- Middleware for cross-cutting concerns (logging, retry, summarization)
 
 **Korean Language Processing**:
 - All UI text, data, and responses are in Korean
 - Upstage Solar embeddings optimized for Korean semantic search
 - Category extraction uses Korean and English patterns
+- Dynamic prompts adapt to career level (주니어, 중니어, 시니어)
 
-### Future Architecture (AGENTIC_SYSTEM_DESIGN.md)
+### Current vs Future Architecture
 
-The project has detailed plans for multi-agent system using LangGraph:
+**Current Implementation** (✅ Working):
+- ReAct Agent with 3 tools (sementic_search, ddgs_search, expert_search)
+- Real-time token streaming with `stream_mode="messages"`
+- Middleware stack for logging, retry, summarization, and tool limits
+- Dynamic system prompt based on user profile context
+- Streamlit chatbot UI with tool execution visualization
+
+**Future Architecture** (AGENTIC_SYSTEM_DESIGN.md):
+The project has detailed plans for expanding to a multi-agent system:
 - **Supervisor Agent**: Query analysis, agent routing, result synthesis
-- **RAG Agent**: Pinecone semantic search
-- **Web Search Agent**: DuckDuckGo for latest information
-- **Profile Analyzer**: Personalized analysis based on user profile
+- **RAG Agent**: Enhanced Pinecone semantic search
+- **Web Search Agent**: Expanded DuckDuckGo integration
+- **Profile Analyzer**: Deeper personalized analysis
 - **Domain Expert**: Specialized advice (backend, frontend, career, management)
 
 See [AGENTIC_SYSTEM_DESIGN.md](AGENTIC_SYSTEM_DESIGN.md) for complete multi-agent architecture design.
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. `AttributeError: 'CachedFunc' object has no attribute 'bind_tools'`
+
+**Cause**: Passing cached function wrapper to `create_agent()` instead of LLM instance.
+
+**Solution**:
+```python
+# ✅ Correct
+llm = get_gemini()  # Call function to get instance
+agent = create_agent(model=llm, ...)
+
+# ❌ Wrong
+agent = create_agent(model=get_gemini, ...)  # Passing function reference
+```
+
+See [claudedocs/bind_tools_error_fix.md](claudedocs/bind_tools_error_fix.md) for detailed analysis.
+
+#### 2. Streaming not working (showing complete response at once)
+
+**Cause**: Using default `stream_mode="values"` instead of `stream_mode="messages"`.
+
+**Solution**:
+```python
+# ✅ Correct: Token-by-token streaming
+for chunk in agent.stream(..., stream_mode="messages"):
+    msg, metadata = chunk
+    # Extract tokens from AIMessageChunk
+
+# ❌ Wrong: State updates only
+for event in agent.stream(...):  # Default mode
+    # Only gets completed messages
+```
+
+See [claudedocs/streaming_implementation_analysis.md](claudedocs/streaming_implementation_analysis.md) for implementation guide.
+
+#### 3. Tool execution errors or timeouts
+
+**Check**:
+- API keys in `.env`: `UPSTAGE_API_KEY`, `PINECONE_API_KEY`, `GOOGLE_API_KEY`
+- Pinecone index exists: `mid-level-helper` with namespace `20251029_crawling`
+- Network connectivity for DuckDuckGo search
+- Tool retry middleware is enabled (configured in [middleware/middleware.py](middleware/middleware.py))
+
+**Debug**:
+```python
+# Enable verbose logging in middleware/middleware.py
+class LoggingMiddleware(AgentMiddleware):
+    def before_model(self, state: AgentState, runtime: Runtime):
+        print(f"Tool calls: {len(state['messages'])} messages")
+        return None
+```
+
+#### 4. Session state errors in Streamlit
+
+**Cause**: Accessing session state before initialization.
+
+**Solution**:
+```python
+# ✅ Initialize before use
+if "user_profile" not in st.session_state:
+    st.session_state.user_profile = None
+
+# Then access
+profile = st.session_state.user_profile
+```
+
+#### 5. Import errors for local modules
+
+**Cause**: Python path not including project root.
+
+**Solution** (for scripts):
+```python
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# Now can import project modules
+from schemas import UserProfile
+from main import get_pinecone
+```
+
+## Documentation
+
+- **Project Overview**: [README.md](README.md)
+- **Architecture Design**: [AGENTIC_SYSTEM_DESIGN.md](AGENTIC_SYSTEM_DESIGN.md)
+- **Technical Docs**: [claudedocs/](claudedocs/) directory
+  - `bind_tools_error_fix.md`: Streamlit caching + LangGraph integration
+  - `streaming_implementation_analysis.md`: Real-time token streaming guide
+
+## References
+
+- [LangChain Agents](https://python.langchain.com/docs/how_to/custom_agent/)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [LangChain Streaming Guide](https://docs.langchain.com/oss/python/langchain/streaming)
+- [Streamlit Caching](https://docs.streamlit.io/develop/concepts/architecture/caching)

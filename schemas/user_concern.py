@@ -15,7 +15,7 @@ class UserConcern:
     urgency: str  # "긴급", "중요", "보통"
 
     # 메타 정보
-    created_at: datetime = None
+    created_at: datetime | None = None
 
     def to_search_query(self) -> str:
         """검색 쿼리로 변환"""

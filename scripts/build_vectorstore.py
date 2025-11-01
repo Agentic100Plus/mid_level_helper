@@ -1,10 +1,5 @@
 import os
-import sys
-
-# ===== 프로젝트 루트를 경로에 추가 =====
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, project_root)
-# =====================================
+from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -70,7 +65,7 @@ def pinecone_batch(
     ids: list[str],
     embeddings: list[list[float]],
     metadatas: list[dict],
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Pinecone 업로드 데이터 포맷"""
     return [
         {"id": id_, "values": embedding, "metadata": metadata} for id_, embedding, metadata in zip(ids, embeddings, metadatas)
@@ -97,7 +92,7 @@ for i in tqdm(range(0, len(texts), BATCH_SIZE), desc="배치 처리"):
 
     # Pinecone에 업로드
     try:
-        index.upsert(vectors=vectors, namespace="20251029_crawling")
+        index.upsert(vectors=vectors, namespace="20251029_crawling")  # type: ignore
         uploaded_count += len(vectors)
     except Exception as e:
         print(f"❌ 업로드 실패 (배치 {i // BATCH_SIZE + 1}): {e}")
@@ -123,7 +118,7 @@ test_embedding = create_embeddings_batch([test_query])[0]
 
 results = index.query(vector=test_embedding, top_k=3, include_metadata=True, namespace="20251029_crawling")
 
-for i, match in enumerate(results.matches, 1):
+for i, match in enumerate(results.matches, 1):  # type: ignore
     print(f"\n[{i}] 유사도: {match.score:.4f}")
     print(f"제목: {match.metadata.get('title', 'N/A')}")
     print(f"카테고리: {match.metadata.get('category', 'N/A')}")

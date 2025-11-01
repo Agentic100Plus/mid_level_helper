@@ -2,10 +2,12 @@ import os
 from datetime import datetime
 
 import streamlit as st
+from dotenv import load_dotenv
 from openai import OpenAI
 
 from schemas import UserConcern, UserProfile
 
+load_dotenv()
 # ====================================
 # For Streamlit Cache Resource
 # 1. Pinecone Index
@@ -16,7 +18,7 @@ from schemas import UserConcern, UserProfile
 
 
 @st.cache_resource(show_spinner="🔄 Pinecone 인덱스 로드 중...", ttl=3600)
-def get_pinecone():
+def _get_pinecone():
     """Cache: Pinecone Index"""
     from pinecone import Pinecone, ServerlessSpec
 
@@ -41,7 +43,7 @@ def get_pinecone():
 
 
 @st.cache_resource(show_spinner="🔄 Upstage 로드 중...", ttl=3600)
-def get_upstage():
+def _get_upstage():
     """Cache: For embedding client - OpenAI wrapper"""
     try:
         return OpenAI(api_key=os.getenv("UPSTAGE_API_KEY"), base_url="https://api.upstage.ai/v1/solar")
@@ -52,22 +54,36 @@ def get_upstage():
 
 @st.cache_resource(show_spinner="🔄 Gemini 로드 중...", ttl=3600)
 def get_gemini():
-    """Cache: Gemini Loader"""
+    """
+    Cache: Gemini LLM Loader
+
+    Returns:
+        ChatGoogleGenerativeAI: LangChain Gemini LLM instance
+
+    Note:
+        - @st.cache_resource는 객체 자체를 캐싱
+        - 함수 호출 시 실제 LLM 인스턴스 반환
+        - LangGraph agent에서 bind_tools() 호출 가능
+    """
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     try:
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.2,
-            max_token=5000,
+            model="gemini-2.5-flash-lite",
+            temperature=0.8,
+            max_tokens=4000,
             max_retries=3,
-            api_key=os.getenv("GEMINI_API_KEY"),
+            api_key=os.getenv("GOOGLE_API_KEY"),
         )
     except Exception as e:
         st.error(f"☠️ Gemini 초기화 실패: {e}")
         st.stop()
 
 
+# 모듈 레벨에서 인스턴스 생성 (하위 호환성 유지)
+get_pinecone = _get_pinecone()
+get_upstage = _get_upstage()
+# get_gemini는 함수로 유지 - 호출 시점에 캐시된 인스턴스 반환
 # ====================================
 # Main Pages: 소개 -> 프로필 -> 고민 등록
 # ====================================
@@ -76,20 +92,20 @@ def get_gemini():
 
 
 if "user_profile" not in st.session_state:
-    st.session_state.user_profile: UserProfile | None = None
+    st.session_state.user_profile: UserProfile | None = None  # type: ignore
 
 if "profile_completed" not in st.session_state:
-    st.session_state.profile_completed: bool = False
-    st.session_state.current_page: str = "main"
+    st.session_state.profile_completed: bool = False  # type: ignore
+    st.session_state.current_page: str = "main"  # type: ignore
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history: list[dict] = []
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
 
 if "user_concerns" not in st.session_state:
-    st.session_state.user_concerns: list[UserConcern] = []
+    st.session_state.user_concerns: list[UserConcern] = []  # type: ignore
 
 if "search_results" not in st.session_state:
-    st.session_state.search_results: list[dict] = []
+    st.session_state.search_results: list[dict] = []  # type: ignore
 
 st.set_page_config(
     page_title="중니어 상담소",
@@ -136,11 +152,13 @@ else:
 
         with col1:
             name = st.text_input("이름 (별명 가능)", placeholder="김개발")
-            career_level = st.selectbox("경력 단계", ["주니어 (0-2년)", "중니어 (3-5년)", "시니어 (6년+)"])
+            career_level = st.selectbox("경력 단계", ["주니어", "중니어", "시니어"])
             years = st.number_input("연차", min_value=0, max_value=30, value=3)
 
         with col2:
-            job_role = st.selectbox("직무", ["백엔드", "프론트엔드", "풀스택", "데이터", "DevOps", "모바일", "기타"])
+            job_role = st.selectbox(
+                "직무", ["백엔드", "프론트엔드", "풀스택", "데이터 엔지니어", "DevOps", "ML 엔지니어", "기타"]
+            )
             tech_stack_input = st.text_input("기술스택 (쉼표로 구분)", placeholder="Python, Django, PostgreSQL")
             company_size = st.selectbox(
                 "회사 규모 (선택)", ["선택 안함", "스타트업 (1-50명)", "중견 (50-300명)", "대기업 (300명+)"]
@@ -156,12 +174,12 @@ else:
             else:
                 # 프로필 생성
                 tech_stack = [t.strip() for t in tech_stack_input.split(",")]
-
+                # TODO: 타입 정확하게 넣기
                 profile = UserProfile(
                     name=name,
-                    career_level=career_level.split(" ")[0],
+                    career_level=career_level.split(" ")[0],  # type: ignore
                     years_of_experience=years,
-                    job_role=job_role,
+                    job_role=job_role,  # type: ignore
                     tech_stack=tech_stack,
                     company_size=None if company_size == "선택 안함" else company_size,
                     work_style=None if work_style == "선택 안함" else work_style,
@@ -176,60 +194,60 @@ else:
 # ============================================
 # 고민 등록
 # ============================================
-st.markdown("---")
-st.subheader("💭 현재 고민 등록")
+# st.markdown("---")
+# st.subheader("💭 현재 고민 등록")
 
-with st.form("concern_form"):
-    col1, col2 = st.columns([2, 1])
+# with st.form("concern_form"):
+#     col1, col2 = st.columns([2, 1])
 
-    with col1:
-        concern_category = st.selectbox(
-            "카테고리", ["성장통", "성장 슬럼프", "경력 정체", "기술 부채", "커리어", "팀워크", "번아웃", "기타"]
-        )
-        concern_title = st.text_input("제목", placeholder="예: 재택근무 동기부여 문제")
+#     with col1:
+#         concern_category = st.selectbox(
+#             "카테고리", ["성장통", "성장 슬럼프", "경력 정체", "기술 부채", "커리어", "팀워크", "번아웃", "기타"]
+#         )
+#         concern_title = st.text_input("제목", placeholder="예: 재택근무 동기부여 문제")
 
-    with col2:
-        concern_urgency = st.radio("우선순위", ["긴급", "중요", "보통"], horizontal=False)
+#     with col2:
+#         concern_urgency = st.radio("우선순위", ["긴급", "중요", "보통"], horizontal=False)
 
-    concern_description = st.text_area("상세 설명", placeholder="현재 겪고 있는 고민을 자세히 적어주세요...", height=100)
+#     concern_description = st.text_area("상세 설명", placeholder="현재 겪고 있는 고민을 자세히 적어주세요...", height=100)
 
-    add_concern = st.form_submit_button("고민 추가", use_container_width=True)
+#     add_concern = st.form_submit_button("고민 추가", use_container_width=True)
 
-    if add_concern:
-        if not concern_title or not concern_description:
-            st.error("제목과 설명을 모두 입력해주세요!")
-        else:
-            concern = UserConcern(
-                category=concern_category,
-                title=concern_title,
-                description=concern_description,
-                urgency=concern_urgency,
-                created_at=datetime.now(),
-            )
+#     if add_concern:
+#         if not concern_title or not concern_description:
+#             st.error("제목과 설명을 모두 입력해주세요!")
+#         else:
+#             concern = UserConcern(
+#                 category=concern_category,
+#                 title=concern_title,
+#                 description=concern_description,
+#                 urgency=concern_urgency,
+#                 created_at=datetime.now(),
+#             )
 
-            st.session_state.user_concerns.append(concern)
-            st.success(f"✅ '{concern_title}' 고민이 추가되었습니다!")
-            st.rerun()
+#             st.session_state.user_concerns.append(concern)
+#             st.success(f"✅ '{concern_title}' 고민이 추가되었습니다!")
+#             st.rerun()
 
 
-# 등록된 고민 목록
-if st.session_state.user_concerns:
-    st.markdown("#### 등록된 고민")
+# # 등록된 고민 목록
+# if st.session_state.user_concerns:
+#     st.markdown("#### 등록된 고민")
 
-    for i, concern in enumerate(st.session_state.user_concerns):
-        urgency_emoji = {"긴급": "🔴", "중요": "🟡", "보통": "🟢"}
+#     for i, concern in enumerate(st.session_state.user_concerns):
+#         urgency_emoji = {"긴급": "🔴", "중요": "🟡", "보통": "🟢"}
 
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            st.markdown(
-                f"{urgency_emoji[concern.urgency]} **[{concern.category}] {concern.title}**  \n_{concern.description[:50]}..._"
-            )
-        with col2:
-            if st.button("삭제", key=f"delete_{i}"):
-                st.session_state.user_concerns.pop(i)
-                st.rerun()
-else:
-    st.info("아직 등록된 고민이 없습니다. 위에서 고민을 추가해보세요!")
+#         col1, col2 = st.columns([5, 1])
+#         with col1:
+#             st.markdown(
+#                 f"{urgency_emoji[concern.urgency]} **[{concern.category}] {concern.title}**  \n_{concern.description[:50]}..._"
+#             )
+#         with col2:
+#             if st.button("삭제", key=f"delete_{i}"):
+#                 st.session_state.user_concerns.pop(i)
+#                 st.rerun()
+# else:
+#     st.info("아직 등록된 고민이 없습니다. 위에서 고민을 추가해보세요!")
 
 
 # ============================================
@@ -244,10 +262,10 @@ with col1:
         if not st.session_state.user_profile:
             st.warning("먼저 프로필을 등록해주세요!")
         else:
-            if not st.session_state.user_concerns:
-                st.warning("고민도 등록해주세요!")
-            else:
-                st.switch_page("pages/chatbot.py")
+            # if not st.session_state.user_concerns:
+            #     st.warning("고민도 등록해주세요!")
+            # else:
+            st.switch_page("pages/chatbot.py")
 
 with col2:
     if st.button("🔍 사례 검색", use_container_width=True):

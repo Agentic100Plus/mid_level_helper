@@ -2,7 +2,6 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import pandas as pd
 
@@ -40,8 +39,8 @@ def extract_category(problem_summary: str) -> str:
     """
     # 한국어 카테고리 패턴
     korean_patterns = [
-        r'\((\S+)\s+이슈\s+사례',  # (성장통 이슈 사례 1)
-        r'\((\S+)\s+관련\s+상황',  # (성장통 관련 상황)
+        r"\((\S+)\s+이슈\s+사례",  # (성장통 이슈 사례 1)
+        r"\((\S+)\s+관련\s+상황",  # (성장통 관련 상황)
     ]
 
     for pattern in korean_patterns:
@@ -50,7 +49,7 @@ def extract_category(problem_summary: str) -> str:
             return match.group(1)
 
     # 영어 카테고리 패턴
-    english_pattern = r'\((\w+(?:\s+\w+)?)\s+이슈\s+사례'
+    english_pattern = r"\((\w+(?:\s+\w+)?)\s+이슈\s+사례"
     match = re.search(english_pattern, problem_summary)
     if match:
         return match.group(1)
@@ -58,7 +57,7 @@ def extract_category(problem_summary: str) -> str:
     return "기타"
 
 
-def extract_keywords_list(keywords: str) -> List[str]:
+def extract_keywords_list(keywords: str) -> list[str]:
     """키워드 문자열을 리스트로 변환.
 
     Args:
@@ -98,7 +97,7 @@ def combine_text_for_embedding(row: pd.Series) -> str:
     return "\n".join(parts)
 
 
-def create_metadata(row: pd.Series, index: int) -> Dict[str, str]:
+def create_metadata(row: pd.Series, index: int) -> dict[str, str]:
     """레코드에서 메타데이터 딕셔너리 생성.
 
     Args:
@@ -122,7 +121,7 @@ def create_metadata(row: pd.Series, index: int) -> Dict[str, str]:
 
 def prepare_documents_for_vectorstore(
     df: pd.DataFrame,
-) -> Tuple[List[str], List[Dict[str, str]]]:
+) -> tuple[list[str], list[dict[str, str]]]:
     """벡터 스토어용 문서와 메타데이터 준비.
 
     Args:
@@ -138,7 +137,7 @@ def prepare_documents_for_vectorstore(
 
     for idx, row in df.iterrows():
         text = combine_text_for_embedding(row)
-        metadata = create_metadata(row, idx)
+        metadata = create_metadata(row, idx)  # type: ignore
 
         texts.append(text)
         metadatas.append(metadata)
@@ -147,7 +146,7 @@ def prepare_documents_for_vectorstore(
     return texts, metadatas
 
 
-def get_category_distribution(df: pd.DataFrame) -> Dict[str, int]:
+def get_category_distribution(df: pd.DataFrame) -> dict[str, int]:
     """카테고리별 레코드 수 집계.
 
     Args:

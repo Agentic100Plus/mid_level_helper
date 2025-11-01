@@ -12,22 +12,26 @@
 
 ### Core Framework
 
-- **LangChain v1.0+**: 최신 LCEL 패턴 기반 RAG 구현
-- **Google GenAI (Gemini)**: LLM 엔진
-- **Streamlit**: 웹 UI 프레임워크
+- **LangChain v1.0+**: ReAct Agent 패턴 기반 구현
+- **LangGraph**: Agent 오케스트레이션, Tools, Middleware
+- **Google GenAI (Gemini 2.5 Flash Lite)**: LLM 엔진 (Function Calling 지원)
+- **Streamlit**: 웹 UI 프레임워크 + 실시간 토큰 스트리밍
 
-### Vector Database
+### Vector Database & Search
 
 - **Pinecone**: 벡터 데이터베이스
 - **Upstage Solar Embeddings**: 한국어 최적화 임베딩 (4096 차원)
+- **DuckDuckGo Search**: 최신 정보 웹 검색
 
 ### Dependencies
 
 ```toml
 langchain>=1.0.2
 langchain-google-genai>=3.0.0
+langgraph>=1.0.0
 streamlit>=1.50.0
 pinecone-client>=5.0.0
+duckduckgo-search>=6.0.0
 python>=3.13
 ```
 
@@ -119,7 +123,7 @@ streamlit run main.py
 앱 페이지:
 
 - **메인 페이지** ([main.py](main.py)): 프로필 및 고민 등록
-- **챗봇** ([pages/chatbot.py](pages/chatbot.py)): AI 상담 (개발 중)
+- **챗봇** ([pages/chatbot.py](pages/chatbot.py)): AI 상담 (✅ **실시간 스트리밍 구현 완료**)
 - **검색** ([pages/search.py](pages/search.py)): 유사 사례 검색 (개발 중)
 
 
@@ -139,8 +143,11 @@ mid_level_helper/
 │
 ├── schemas/
 │   ├── __init__.py
-│   ├── profile.py                # UserProfile 스키마
-│   └── concern.py                # UserConcern 스키마
+│   ├── user_profile.py           # UserProfile 스키마
+│   ├── user_concern.py           # UserConcern 스키마
+│   ├── carreer_role.py           # 직무 Enum
+│   ├── tool_*.py                 # Tool 응답 스키마
+│   └── common_competencies.py    # 경력별 역량 정의
 │
 ├── utils/
 │   ├── __init__.py
@@ -149,37 +156,61 @@ mid_level_helper/
 ├── scripts/
 │   └── build_vectorstore.py      # Pinecone 벡터 스토어 구축
 │
-├── chains/
+├── tools/                        # ✅ LangChain Tools (구현 완료)
 │   ├── __init__.py
-│   ├── retriever.py              # Pinecone 검색기
-│   └── chain.py                  # RAG 체인 (WIP)
+│   ├── tool_sementic_search.py   # Pinecone 의미 검색
+│   ├── tool_ddgs.py              # DuckDuckGo 웹 검색
+│   └── tool_expert.py            # 도메인 전문가 조언
 │
-├── agents/                       # 멀티 에이전트 시스템 (예정)
+├── middleware/                   # ✅ LangGraph Middleware (구현 완료)
+│   ├── __init__.py
+│   └── middleware.py             # 동적 프롬프트, 로깅, 재시도, 요약
+│
+├── prompts/                      # ✅ 시스템 프롬프트 (구현 완료)
+│   ├── __init__.py
+│   └── carreer_roles.py          # 경력별 프롬프트
+│
+├── agents/                       # ReAct Agent 구성 (일부 구현)
+│   ├── __init__.py
+│   └── react_chain.py            # Agent 팩토리 (commented out)
 │
 ├── tests/
-│   └── test_retriever.py         # 검색기 테스트
+│   ├── __init__.py
+│   ├── test_tools.py             # Tools 테스트
+│   └── test_agent_debug.py       # Agent 디버깅
 │
-├── main.py                       # Streamlit 메인 페이지
+├── claudedocs/                   # ✅ 기술 문서 (작성 완료)
+│   ├── bind_tools_error_fix.md  # Streamlit 캐싱 + LangGraph 통합
+│   └── streaming_implementation_analysis.md  # 실시간 스트리밍 가이드
+│
+├── main.py                       # Streamlit 메인 페이지 (✅ 캐싱 최적화)
 │
 └── pages/
-    ├── chatbot.py                # AI 상담 챗봇 (WIP)
-    └── search.py                 # 유사 사례 검색 (WIP)
+    ├── chatbot.py                # ✅ AI 상담 챗봇 (실시간 스트리밍 구현 완료)
+    └── search.py                 # 유사 사례 검색 (삭제됨)
 ```
 
 ## 🎯 주요 기능
 
-### 현재 구현
+### 현재 구현 완료 ✅
 
-- ✅ **벡터 스토어 구축**: Pinecone + Upstage Solar 임베딩
+- ✅ **벡터 스토어 구축**: Pinecone + Upstage Solar 임베딩 (4096 차원)
 - ✅ **프로필 관리**: 경력, 기술 스택, 업무 스타일 등록
-- ✅ **고민 등록**: 카테고리별 고민 사항 기록
 - ✅ **데이터 처리**: 3000개 중니어 사례 전처리 및 인덱싱
+- ✅ **ReAct Agent 챗봇**: LangGraph 기반 에이전트 시스템
+  - 3개 Tools: Pinecone 검색, DuckDuckGo 웹 검색, 전문가 조언
+  - Middleware 스택: 동적 프롬프트, 로깅, 재시도, 요약
+  - 실시간 토큰 스트리밍 (`stream_mode="messages"`)
+  - Tool 실행 로그 시각화 (🔧 호출, ✅ 결과)
+- ✅ **경력별 맞춤 상담**: 주니어/중니어/시니어 단계별 프롬프트
+- ✅ **Streamlit 캐싱 최적화**: LangGraph 통합 패턴
 
-### 개발 예정 (WIP)
+### 개발 예정 (Future)
 
-- 🔨 **AI 챗봇**: RAG 기반 맞춤형 상담
-- 🔨 **유사 사례 검색**: 벡터 유사도 기반 검색
-- 🔨 **멀티 에이전트 시스템**: LangGraph 기반 에이전트 조율
+- 🔨 **멀티 에이전트 시스템**: Supervisor + 전문 에이전트 (AGENTIC_SYSTEM_DESIGN.md 참조)
+- 🔨 **유사 사례 검색 UI**: 독립 검색 페이지
+- 🔨 **프로필 분석 강화**: 더 깊은 개인화 분석
+- 🔨 **추가 Tools**: GitHub, Stack Overflow 통합
 
 ## 📊 데이터 구조
 
