@@ -19,7 +19,8 @@
 
 ### Vector Database & Search
 
-- **Pinecone**: 벡터 데이터베이스
+- **Pinecone**: 벡터 데이터베이스 (시맨틱 검색)
+- **FalkorDB**: 그래프 데이터베이스 (키워드 관계 분석)
 - **Upstage Solar Embeddings**: 한국어 최적화 임베딩 (4096 차원)
 - **DuckDuckGo Search**: 최신 정보 웹 검색
 
@@ -30,7 +31,8 @@ langchain>=1.0.2
 langchain-google-genai>=3.0.0
 langgraph>=1.0.0
 streamlit>=1.50.0
-pinecone-client>=5.0.0
+pinecone>=7.3.0
+falkordb>=1.2.0
 duckduckgo-search>=6.0.0
 python>=3.13
 ```
@@ -58,6 +60,10 @@ UPSTAGE_API_KEY=your_upstage_api_key
 PINECONE_API_KEY=your_pinecone_api_key
 GEMINI_API_KEY=your_gemini_api_key
 PINECONE_INDEX_NAME=mid-level-helper
+
+# FalkorDB (Optional, defaults)
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6379
 ```
 
 ### 2. 벡터 스토어 구축
@@ -114,7 +120,63 @@ python -m scripts.build_vectorstore
 ============================================================
 ```
 
-### 3. 애플리케이션 실행
+### 3. 그래프 데이터베이스 구축
+
+FalkorDB를 사용하여 키워드 기반 그래프 데이터베이스를 구축합니다.
+
+```bash
+# FalkorDB 시작 (Docker)
+docker run -d -p 6379:6379 falkordb/falkordb:latest
+
+# 그래프 데이터베이스 구축
+python -m scripts.build_graphdb
+```
+
+출력 예시:
+
+```plaintext
+============================================================
+🚀 FalkorDB 그래프 구축 시작
+============================================================
+
+📦 Pinecone 연결 중...
+✅ Pinecone 인덱스: mid-level-helper
+   - 총 벡터 수: 3,000
+   - 네임스페이스: 20251029_crawling
+
+🔨 FalkorDB 초기화 중...
+⚠️  기존 그래프 데이터를 삭제하시겠습니까? (y/N): y
+✅ 기존 데이터 삭제 완료
+
+🔨 그래프 구축 중...
+📂 카테고리 노드 생성: 8개
+📄 문서 및 키워드 노드 생성: 3,000개
+🔗 키워드 공동 출현 관계 생성...
+
+============================================================
+📊 그래프 통계
+============================================================
+그래프 이름: mid_level_helper
+
+노드:
+  - Document: 3,000개
+  - Keyword: 1,500개
+  - Category: 8개
+
+관계:
+  - HAS_KEYWORD: 15,000개
+  - BELONGS_TO: 3,000개
+  - CO_OCCURS_WITH: 10,000개
+============================================================
+
+🎉 FalkorDB 그래프 구축 완료!
+```
+
+**그래프 스키마:**
+- **노드**: Document (문서), Keyword (키워드), Category (카테고리)
+- **관계**: HAS_KEYWORD, BELONGS_TO, CO_OCCURS_WITH (공동 출현)
+
+### 4. 애플리케이션 실행
 
 ```bash
 streamlit run main.py

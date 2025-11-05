@@ -15,6 +15,7 @@ A LangChain v1.0 chatbot that analyzes mid-level (중니어) developer concerns,
 - **Google GenAI (Gemini 2.5 Flash Lite)**: LLM provider via `langchain-google-genai` (v3.0.0+)
 - **Streamlit**: UI framework (v1.50.0+) with multi-page app and real-time token streaming
 - **Pinecone**: Vector database for semantic search
+- **FalkorDB**: Graph database for keyword-based relationship analysis
 - **Upstage Solar**: Korean-optimized embeddings (4096 dimensions)
 - **DuckDuckGo Search**: Web search tool for latest information
 - **Python 3.13**: Required minimum version
@@ -30,6 +31,7 @@ uv sync
 # Create .env file with required API keys
 cp .env.example .env
 # Add: UPSTAGE_API_KEY, PINECONE_API_KEY, GEMINI_API_KEY, PINECONE_INDEX_NAME
+# Add: FALKORDB_HOST, FALKORDB_PORT (optional, defaults: localhost, 6379)
 
 # Activate virtual environment (optional, uv handles this)
 source .venv/bin/activate  # macOS/Linux
@@ -45,6 +47,26 @@ python -m scripts.build_vectorstore
 # - Generate Upstage embeddings for all 3000 CSV records
 # - Upload vectors to Pinecone with namespace "20251029_crawling"
 # - Verify with sample search
+```
+
+### Building Graph Database
+```bash
+# Start FalkorDB (Docker)
+docker run -d -p 6379:6379 falkordb/falkordb:latest
+
+# Build/rebuild FalkorDB graph database (run once or when data changes)
+python -m scripts.build_graphdb
+
+# This will:
+# - Connect to FalkorDB (localhost:6379)
+# - Create graph schema with indexes
+# - Fetch metadata from Pinecone namespace "20251029_crawling"
+# - Build graph with Document, Keyword, Category nodes
+# - Create relationships: HAS_KEYWORD, BELONGS_TO, CO_OCCURS_WITH
+# - Display graph statistics
+
+# Test graph queries
+python -m utils.graph_queries
 ```
 
 ### Running the Application
@@ -95,6 +117,32 @@ Columns (Korean headers):
 - 기술 부채 (Technical debt)
 - 개발 문화 (Development culture)
 
+**Graph Database Structure** (FalkorDB):
+
+Node Types:
+1. **Document** (문서 노드)
+   - Properties: `id`, `title`, `source`, `problem_summary`, `category`
+   - Represents each developer case/post
+
+2. **Keyword** (키워드 노드)
+   - Properties: `name`
+   - Represents extracted keywords from posts
+
+3. **Category** (카테고리 노드)
+   - Properties: `name`
+   - Represents issue categories
+
+Relationship Types:
+1. **HAS_KEYWORD**: (Document)-[HAS_KEYWORD]->(Keyword)
+   - Links documents to their keywords
+
+2. **BELONGS_TO**: (Document)-[BELONGS_TO]->(Category)
+   - Links documents to their categories
+
+3. **CO_OCCURS_WITH**: (Keyword)-[CO_OCCURS_WITH {weight}]-(Keyword)
+   - Links keywords that appear together in documents
+   - Property: `weight` (co-occurrence frequency)
+
 ## Architecture
 
 ### Core Components
@@ -120,6 +168,7 @@ Columns (Korean headers):
 - `sementic_search.py`: Pinecone semantic search with Upstage embeddings
 - `ddgs_search.py`: DuckDuckGo web search for latest information
 - `expert_search.py`: Domain expert advice generation
+- `graph_search.py`: FalkorDB graph search (keyword-based relationship analysis)
 
 **middleware/middleware.py**: LangGraph middleware (✅ Implemented)
 - `dynamic_system_prompt`: Context-aware system prompt injection
@@ -137,6 +186,14 @@ Columns (Korean headers):
 **utils/data_loader.py**: CSV processing utilities
 - Functions: `load_csv_data()`, `extract_category()`, `combine_text_for_embedding()`, `prepare_documents_for_vectorstore()`
 - Handles Korean text columns: `글 제목`, `출처`, `핵심 키워드`, `문제점 요약`, `글 내용 요약`
+
+**utils/graph_db.py**: FalkorDB connection and schema management
+- Functions: `get_falkordb_client()`, `get_graph()`, `create_graph_schema()`, `get_graph_stats()`
+- Graph schema: Document, Keyword, Category nodes with HAS_KEYWORD, BELONGS_TO, CO_OCCURS_WITH relationships
+
+**utils/graph_queries.py**: Graph database query functions
+- Functions: `search_documents_by_keywords()`, `get_related_keywords()`, `get_keyword_network()`
+- Cypher query utilities for keyword-based document search and relationship exploration
 
 **prompts/**: System prompts (✅ Implemented)
 - Career-level-specific prompts (junior, mid-level, senior)
@@ -213,6 +270,29 @@ agent = create_agent(
 - All vector operations use namespace `"20251029_crawling"`
 - Must be specified in queries: `index.query(namespace="20251029_crawling", ...)`
 
+**Graph Database Pattern**:
+```python
+# Get graph instance
+from utils.graph_db import get_graph
+graph = get_graph("mid_level_helper")
+
+# Query documents by keywords
+from utils.graph_queries import search_documents_by_keywords
+docs = search_documents_by_keywords(["성장통", "재택근무"], limit=5)
+
+# Get related keywords (co-occurrence based)
+from utils.graph_queries import get_related_keywords
+related = get_related_keywords("성장통", limit=10)
+
+# Cypher query example
+query = """
+MATCH (d:Document)-[:HAS_KEYWORD]->(k:Keyword {name: $keyword})
+RETURN d.title, d.category
+LIMIT 10
+"""
+result = graph.query(query, {"keyword": "성장통"})
+```
+
 **Import Path Handling**:
 - Scripts add project root to `sys.path` before imports
 - Pattern: `sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))`
@@ -232,7 +312,8 @@ agent = create_agent(
 ### Current vs Future Architecture
 
 **Current Implementation** (✅ Working):
-- ReAct Agent with 3 tools (sementic_search, ddgs_search, expert_search)
+- ReAct Agent with 4 tools (sementic_search, ddgs_search, expert_search, graph_search)
+- FalkorDB graph database for keyword-based relationship analysis
 - Real-time token streaming with `stream_mode="messages"`
 - Middleware stack for logging, retry, summarization, and tool limits
 - Dynamic system prompt based on user profile context
