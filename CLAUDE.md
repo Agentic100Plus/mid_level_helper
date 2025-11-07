@@ -153,10 +153,11 @@ Relationship Types:
 - Profile/concern registration forms with validation
 - **IMPORTANT**: `get_gemini()` returns cached LLM instance (not pre-instantiated)
 
-**pages/chatbot.py**: ReAct Agent chatbot with real-time streaming (✅ Implemented)
-- LangGraph `create_agent()` with tools and middleware
-- Real-time token streaming using `stream_mode="messages"`
-- Tool execution visualization (🔧 Tool calls, ✅ Tool results)
+**pages/chatbot.py**: ReAct Agent chatbot with progress tracking (✅ Implemented)
+- LangGraph `create_agent()` with 5 tools and middleware stack
+- Progress streaming using `stream_mode="updates"` for intermediate steps
+- Tool execution visualization with `st.status()` (running → complete states)
+- Typing effect for final response (word-by-word animation)
 - Dynamic system prompt based on user profile
 - Chat history management with session state
 
@@ -223,24 +224,42 @@ agent = create_agent(model=llm, tools=tools, ...)
 get_gemini = _get_gemini()  # Causes bind_tools error
 ```
 
-**Real-Time Token Streaming** (✅ Implemented):
+**Streaming with Progress Visualization** (✅ Implemented):
 ```python
-# Use stream_mode="messages" for token-by-token streaming
-for chunk in agent.stream(
-    {"messages": [{"role": "user", "content": prompt}]},
+# Use stream_mode="updates" for intermediate step tracking
+for update in agent.stream(
+    {"messages": st.session_state.chat_messages},
+    {"configurable": {"thread_id": "1"}},
     context=profile,
-    stream_mode="messages",  # Critical for token streaming
+    stream_mode="updates",  # Track each node execution
 ):
-    msg, metadata = chunk
-    node_name = metadata.get("langgraph_node", "")
+    for node_name, node_output in update.items():
+        # Agent node: tool call decision
+        if node_name == "agent":
+            if "messages" in node_output:
+                for msg in node_output["messages"]:
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        # Display tool execution status
+                        status_placeholder = st.status(
+                            f"🔧 {tool_name} 실행 중...",
+                            expanded=True,
+                            state="running"
+                        )
 
-    # Token extraction from LLM node
-    if "model" in node_name.lower():
-        if msg.__class__.__name__ == "AIMessageChunk":
-            token = getattr(msg, "content", "")
-            if token:
-                full_response += token
-                response_placeholder.markdown(full_response + "▌")
+        # Tools node: tool execution result
+        elif node_name == "tools":
+            # Update tool status to complete
+            status_placeholder.update(
+                label=f"✅ {tool_name} 완료",
+                state="complete"
+            )
+
+# Final response with typing effect
+words = full_response.split()
+for word in words:
+    displayed_text += word + " "
+    response_placeholder.markdown(displayed_text + "▌")
+    time.sleep(0.02)
 ```
 
 **Agent + Middleware Pattern**:
@@ -312,12 +331,14 @@ result = graph.query(query, {"keyword": "성장통"})
 ### Current vs Future Architecture
 
 **Current Implementation** (✅ Working):
-- ReAct Agent with 4 tools (sementic_search, ddgs_search, expert_search, graph_search)
+- ReAct Agent with 5 tools (sementic_search, graph_keyword_search, graph_related_keywords, ddgs_search, expert_search)
 - FalkorDB graph database for keyword-based relationship analysis
-- Real-time token streaming with `stream_mode="messages"`
+- Progress streaming with `stream_mode="updates"` for intermediate steps
+- Tool execution visualization with `st.status()` (running → complete)
+- Typing effect for final response
 - Middleware stack for logging, retry, summarization, and tool limits
 - Dynamic system prompt based on user profile context
-- Streamlit chatbot UI with tool execution visualization
+- Streamlit chatbot UI with real-time progress tracking
 
 **Future Architecture** (AGENTIC_SYSTEM_DESIGN.md):
 The project has detailed plans for expanding to a multi-agent system:
