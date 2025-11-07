@@ -3,7 +3,8 @@ Streamlit 채팅 UI
 
 스트리밍 기반 ReAct Agent 챗봇 인터페이스
 - 실시간 토큰 단위 스트리밍 (LangChain stream_mode="messages")
-- 중간 과정 로그 표시 (Tool calls, Results)
+- 중간 과정 상태 표시 (stream_mode="updates")
+- 도구 호출 및 결과 시각화
 - 채팅 히스토리 관리
 """
 
@@ -15,11 +16,14 @@ from main import get_gemini
 from middleware.middleware import common_middlewares, dynamic_system_prompt
 from schemas import UserProfile
 from tools import ddgs_search, expert_search, sementic_search
+from tools.graph_search import graph_keyword_search, graph_related_keywords
 
 # 툴 등록
 tools = [
-    ddgs_search,
     sementic_search,
+    graph_keyword_search,
+    graph_related_keywords,
+    ddgs_search,
     expert_search,
 ]
 # ========================================
@@ -91,14 +95,17 @@ for msg in st.session_state.chat_messages:
 
     elif role == "tool":
         # Tool 호출 로그
-        with st.chat_message("assistant", avatar="🔧"):
-            st.caption(content)
+        tool_name = msg.get("tool_name", "Tool")
+        tool_args = msg.get("tool_args", {})
+
+        with st.status(f"✅ {tool_name} 완료", expanded=False, state="complete"):
+            st.write(f"**도구**: {tool_name}")
+            if tool_args:
+                st.json(tool_args, expanded=False)
 
     elif role == "tool_result":
-        # Tool 결과 로그
-        with st.chat_message("assistant", avatar="✅"):
-            with st.expander(f"📦 {msg.get('tool_name', 'Tool')} 결과", expanded=False):
-                st.text(content[:500] + "..." if len(content) > 500 else content)
+        # Tool 결과는 위 status에 포함되므로 별도 표시 안함
+        pass
 
 # ========================================
 # 채팅 입력 처리
@@ -115,9 +122,10 @@ if prompt := st.chat_input("고민을 입력하세요..."):
     # Agent 스트리밍 실행
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
-        tool_log_container = st.container()
+        status_container = st.container()
 
         full_response = ""
+        tool_statuses = {}  # 도구별 상태 추적: {tool_name: status_placeholder}
 
         try:
             # Agent 가져오기 (Streamlit 캐싱)
@@ -134,87 +142,117 @@ if prompt := st.chat_input("고민을 입력하세요..."):
                 context_schema=UserProfile,
             )
 
-            chat_messages = [
-                {"role": "user" if msg["role"] == "user" else "ai", "content": msg["content"]}
-                for msg in st.session_state.chat_messages
-            ]
-            # 토큰 단위 스트리밍: stream_mode="messages"
-            # 참고: https://docs.langchain.com/oss/python/langchain/streaming
-            for chunk in agent.stream(
+            # stream_mode="updates"로 변경하여 중간 과정 추적
+            # updates 모드: 각 노드의 실행 결과를 받음
+            for update in agent.stream(
                 {"messages": st.session_state.chat_messages},
                 {"configurable": {"thread_id": "1"}},
                 context=profile,
-                stream_mode="messages",
+                stream_mode="updates",
             ):
-                # chunk는 (message, metadata) 튜플 형태
-                # 튜플 언패킹 확인
-                if not isinstance(chunk, tuple) or len(chunk) != 2:
-                    continue
+                # update는 {node_name: node_output} 형태의 딕셔너리
+                for node_name, node_output in update.items():
 
-                msg, metadata = chunk
+                    # Agent 노드: 도구 호출 결정
+                    if node_name == "agent":
+                        if "messages" in node_output:
+                            messages = node_output["messages"]
+                            for msg in messages:
+                                msg_class = msg.__class__.__name__
 
-                # 메타데이터가 dict인지 확인
-                if not isinstance(metadata, dict):
-                    continue
+                                # AIMessage with tool_calls: 도구 호출 시작
+                                if msg_class == "AIMessage" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                                    for tool_call in msg.tool_calls:
+                                        tool_name = tool_call.get("name", "Unknown")
+                                        tool_args = tool_call.get("args", {})
 
-                # 메타데이터에서 현재 노드 확인
-                node_name = metadata.get("langgraph_node", "")
+                                        # 도구 호출 상태 표시
+                                        with status_container:
+                                            status_placeholder = st.status(
+                                                f"🔧 {tool_name} 실행 중...",
+                                                expanded=True,
+                                                state="running"
+                                            )
+                                            with status_placeholder:
+                                                st.write(f"**도구**: {tool_name}")
+                                                if tool_args:
+                                                    st.json(tool_args, expanded=False)
 
-                # 메시지 클래스 확인
-                msg_class = msg.__class__.__name__
-                print(msg)
+                                        # 상태 추적
+                                        tool_statuses[tool_name] = status_placeholder
 
-                # Tool 노드에서의 메시지 처리
-                if "tools" in node_name.lower():
-                    # Tool 호출 감지 (AIMessageChunk with tool_calls)
-                    if msg_class == "AIMessageChunk" and hasattr(msg, "tool_calls") and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if isinstance(tool_call, dict):
-                                tool_name = tool_call.get("name", "Unknown")
-                                if tool_name and tool_name != "Unknown":
-                                    tool_log = f"🔧 **{tool_name}** 호출 중..."
+                                        # 히스토리 저장
+                                        st.session_state.chat_messages.append({
+                                            "role": "tool",
+                                            "type": "call",
+                                            "content": f"🔧 {tool_name} 호출",
+                                            "tool_name": tool_name,
+                                            "tool_args": tool_args
+                                        })
 
-                                    with tool_log_container:
-                                        with st.chat_message("assistant", avatar="🔧"):
-                                            st.caption(tool_log)
+                    # Tools 노드: 도구 실행 결과
+                    elif node_name == "tools":
+                        if "messages" in node_output:
+                            messages = node_output["messages"]
+                            for msg in messages:
+                                msg_class = msg.__class__.__name__
 
-                                    st.session_state.chat_messages.append(
-                                        {"role": "tool", "content": tool_log, "tool_name": tool_name}
-                                    )
+                                # ToolMessage: 도구 실행 완료
+                                if msg_class == "ToolMessage":
+                                    tool_name = getattr(msg, "name", "Unknown")
+                                    tool_result = getattr(msg, "content", "")
 
-                    # Tool 결과 감지
-                    elif msg_class == "ToolMessage":
-                        tool_name = getattr(msg, "name", "Unknown")
-                        tool_result = getattr(msg, "content", "")
-                        tool_call_id = getattr(msg, "tool_call_id", "")
+                                    # 도구 상태 업데이트
+                                    if tool_name in tool_statuses:
+                                        status_placeholder = tool_statuses[tool_name]
+                                        status_placeholder.update(
+                                            label=f"✅ {tool_name} 완료",
+                                            state="complete",
+                                            expanded=False
+                                        )
+                                        with status_placeholder:
+                                            st.write(f"**도구**: {tool_name}")
+                                            st.write(f"**결과**:")
+                                            result_preview = str(tool_result)[:1000]
+                                            if len(str(tool_result)) > 1000:
+                                                result_preview += "..."
+                                            st.text(result_preview)
 
-                        with tool_log_container:
-                            with st.chat_message("assistant", avatar="✅"):
-                                with st.expander(f"📦 {tool_name} 결과", expanded=False):
-                                    result_preview = str(tool_result)[:500]
-                                    if len(str(tool_result)) > 500:
-                                        result_preview += "..."
-                                    st.text(result_preview)
+                                    # 히스토리 저장
+                                    st.session_state.chat_messages.append({
+                                        "role": "tool_result",
+                                        "content": tool_result,
+                                        "tool_name": tool_name
+                                    })
 
-                        st.session_state.chat_messages.append(
-                            {"role": "tool", "content": tool_result, "tool_name": tool_name, "tool_call_id": tool_call_id}
-                        )
+            # 최종 응답 추출 및 타이핑 효과
+            import time
 
-                # LLM 노드에서의 토큰 스트리밍
-                elif "model" in node_name.lower() or "agent" in node_name.lower():
-                    # AIMessageChunk에서 토큰 추출
-                    if msg_class == "AIMessageChunk" and hasattr(msg, "content"):
-                        token = getattr(msg, "content", "")
-                        if token:
-                            # Tool calls가 없는 경우만 응답 토큰으로 간주
-                            has_tool_calls = hasattr(msg, "tool_calls") and msg.tool_calls
-                            if not has_tool_calls:
-                                full_response += token
-                                # 실시간 토큰 표시 (커서 효과)
-                                response_placeholder.markdown(full_response + "▌")
+            final_state = agent.get_state({"configurable": {"thread_id": "1"}})
+            if final_state and "messages" in final_state.values:
+                messages = final_state.values["messages"]
+                # 마지막 AIMessage 찾기
+                for msg in reversed(messages):
+                    if msg.__class__.__name__ == "AIMessage":
+                        content = getattr(msg, "content", "")
+                        # Tool calls가 없는 최종 응답만
+                        has_tool_calls = hasattr(msg, "tool_calls") and msg.tool_calls
+                        if content and not has_tool_calls:
+                            full_response = content
+                            break
 
-            # 최종 응답 표시 (커서 제거)
+            # 응답 표시 (타이핑 효과)
             if full_response:
+                # 타이핑 효과: 단어 단위로 표시
+                words = full_response.split()
+                displayed_text = ""
+
+                for i, word in enumerate(words):
+                    displayed_text += word + " "
+                    response_placeholder.markdown(displayed_text + "▌")
+                    time.sleep(0.02)  # 단어당 20ms 지연
+
+                # 최종 표시 (커서 제거)
                 response_placeholder.markdown(full_response)
                 st.session_state.chat_messages.append({"role": "assistant", "content": full_response})
             else:
